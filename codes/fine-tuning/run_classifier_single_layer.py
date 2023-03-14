@@ -23,6 +23,9 @@ import os
 import logging
 import argparse
 import random
+import sys
+
+from sklearn.metrics import roc_auc_score
 from tqdm import tqdm, trange
 import pandas as pd
 
@@ -36,10 +39,31 @@ import tokenization
 from modeling_single_layer import BertConfig, BertForSequenceClassification
 from optimization import BERTAdam
 
-logging.basicConfig(format = '%(asctime)s - %(levelname)s - %(name)s -   %(message)s', 
-                    datefmt = '%m/%d/%Y %H:%M:%S',
-                    level = logging.INFO)
-logger = logging.getLogger(__name__)
+def touch(fname, times=None):
+    fhandle = open(fname, 'a')
+    try:
+        os.utime(fname, times)
+    finally:
+        fhandle.close()
+def init_log(file_name):
+    if not os.path.exists(f'log/'):
+        os.mkdir(f'log/')
+    if not os.path.exists(f'log/{file_name}_std_out.log'):
+        touch(f'log/{file_name}_std_out.log')
+    if not os.path.exists(f'log/{file_name}_debug_info.log'):
+        touch(f'log/{file_name}_debug_info.log')
+    sys.stderr = open(f'log/{file_name}_std_out.log', 'a')
+    sys.stdout = open(f'log/{file_name}_std_out.log', 'a')
+    handler = logging.FileHandler(f'log/{file_name}_debug_info.log')
+    formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+    handler.setFormatter(formatter)
+
+# logging.basicConfig(format = '%(asctime)s - %(levelname)s - %(name)s -   %(message)s',
+#                     datefmt = '%m/%d/%Y %H:%M:%S',
+#                     level = logging.INFO)
+    logger = logging.getLogger(__name__)
+    logger.addHandler(handler)
+    return logger
 
 
 class InputExample(object):
@@ -201,6 +225,7 @@ class AGNewsProcessor(DataProcessor):
     def get_train_examples(self, data_dir):
         """See base class."""
         train_data = pd.read_csv(os.path.join(data_dir, "train.csv"),header=None).values
+        print(f'train_data.shape ： {train_data.shape}')
         return self._create_examples(train_data, "train")
 
     def get_dev_examples(self, data_dir):
@@ -621,7 +646,7 @@ def accuracy(out, labels):
     outputs = np.argmax(out, axis=1)
     return np.sum(outputs==labels)
 
-def main():
+def parser():
     parser = argparse.ArgumentParser()
 
     ## Required parameters
@@ -647,6 +672,12 @@ def main():
                         required=True,
                         help="The vocabulary file that the BERT model was trained on.")
     parser.add_argument("--output_dir",
+                        default=None,
+                        type=str,
+                        required=True,
+                        help="The output directory where the model checkpoints will be written.")
+
+    parser.add_argument("--log_to_file_name",
                         default=None,
                         type=str,
                         required=True,
@@ -716,8 +747,8 @@ def main():
                         type=int,
                         default=-1,
                         help="local_rank for distributed training on gpus")
-    parser.add_argument('--seed', 
-                        type=int, 
+    parser.add_argument('--seed',
+                        type=int,
                         default=42,
                         help="random seed for initialization")
     parser.add_argument('--gradient_accumulation_steps',
@@ -757,6 +788,9 @@ def main():
                              "other positive numbers k mean the first k tokens "
                              "and the last (seq_len - k) tokens")
     args = parser.parse_args()
+    return args
+
+def main():
 
     processors = {
         "ag": AGNewsProcessor,
@@ -929,8 +963,10 @@ def main():
                     global_step += 1
 
             model.eval()
-            eval_loss, eval_accuracy = 0, 0
+            eval_loss, eval_accuracy,eval_auc  = 0, 0,0
             nb_eval_steps, nb_eval_examples = 0, 0
+            all_pretict_y=[]
+            all_true_y=[]
             with open(os.path.join(args.output_dir, "results_ep"+str(epoch)+".txt"),"w") as f:
                 for input_ids, input_mask, segment_ids, label_ids in tqdm(eval_dataloader, desc="Evaluate"):
                     input_ids = input_ids.to(device)
@@ -951,14 +987,24 @@ def main():
                     eval_loss += tmp_eval_loss.mean().item()
                     eval_accuracy += tmp_eval_accuracy
 
+                    # print(f'label_ids : {label_ids}')
+                    # print(f'outputs : {outputs}')
+                    # print(f'all_true_y : {all_true_y}')
+                    # print(f'all_pretict_y : {all_pretict_y}')
+                    # all_true_y.append(label_ids)
+                    all_true_y = np.append(all_true_y,label_ids)
+                    all_pretict_y = np.append(all_pretict_y,logits[:,1])
+                    # all_pretict_y.append(outputs)
                     nb_eval_examples += input_ids.size(0)
                     nb_eval_steps += 1
 
             eval_loss = eval_loss / nb_eval_steps
             eval_accuracy = eval_accuracy / nb_eval_examples
+            eval_auc = roc_auc_score(np.array(all_true_y), np.array(all_pretict_y))
 
             result = {'eval_loss': eval_loss,
                       'eval_accuracy': eval_accuracy,
+                      'eval_auc': eval_auc,
                       'global_step': global_step,
                       'loss': tr_loss/nb_tr_steps}
 
@@ -973,4 +1019,6 @@ def main():
 
 
 if __name__ == "__main__":
+    args = parser()
+    logger = init_log(args.log_to_file_name)
     main()

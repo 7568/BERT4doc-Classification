@@ -26,7 +26,10 @@ For fine-tuning, we borrow some codes from pytorch-pretrained-bert package (now 
 
 + torch>=0.4.1,<=1.2.0
 
-
+conda create -n bert4doc python=3.6
+ pip  install tensorflow==1.15.5
+conda install spacy pandas numpy
+conda install pytorch==1.2.0 torchvision==0.4.0 cudatoolkit=10.0 -c pytorch
 
 ## Run the code
 
